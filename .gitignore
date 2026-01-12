@@ -40,3 +40,5 @@ yarn-error.log*
 
 # claude temp files
 tmpclaude-*
+
+.vercel
