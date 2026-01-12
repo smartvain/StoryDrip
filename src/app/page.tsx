@@ -1,26 +1,10 @@
-import { cookies } from "next/headers";
 import { getStory } from "@/lib/getStory";
 import { genreLabels } from "@/lib/pools";
-
-const COOKIE_NAME = "vid";
-const COOKIE_MAX_AGE = 31536000;
 
 export const dynamic = "force-dynamic";
 
 export default async function Home() {
-  const { story, newVid } = await getStory();
-
-  // 新規vidの場合はcookieをセット
-  if (newVid) {
-    const cookieStore = await cookies();
-    cookieStore.set(COOKIE_NAME, newVid, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      path: "/",
-      maxAge: COOKIE_MAX_AGE,
-    });
-  }
+  const { story } = await getStory();
 
   const genreLabel = genreLabels[story.genre];
 

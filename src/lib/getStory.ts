@@ -1,5 +1,4 @@
 import { cookies } from "next/headers";
-import { v4 as uuidv4 } from "uuid";
 import { getBucket } from "./hash";
 import { generateStorySpec, selectGenre } from "./storySpec";
 import { type Genre, genres } from "./pools";
@@ -10,17 +9,16 @@ import { generateStoryWithRetry, getFallbackStory } from "./ai";
 const COOKIE_NAME = "vid";
 
 /**
- * vidを取得または生成（Server Component用）
+ * vidを取得（middlewareで必ず設定されている前提）
  */
-async function getOrCreateVid(): Promise<{ vid: string; isNew: boolean }> {
+async function getVid(): Promise<string> {
   const cookieStore = await cookies();
-  const existingVid = cookieStore.get(COOKIE_NAME)?.value;
-
-  if (existingVid) {
-    return { vid: existingVid, isNew: false };
+  const vid = cookieStore.get(COOKIE_NAME)?.value;
+  // middlewareで設定されるはずなので、ない場合はエラー
+  if (!vid) {
+    throw new Error("vid cookie not found");
   }
-
-  return { vid: uuidv4(), isNew: true };
+  return vid;
 }
 
 /**
@@ -36,7 +34,6 @@ function parseGenre(genreParam: string | null): Genre | null {
 
 export interface GetStoryResult {
   story: StoryResponse;
-  newVid: string | null; // 新規発行されたvidがあれば
 }
 
 /**
@@ -45,8 +42,8 @@ export interface GetStoryResult {
 export async function getStory(
   genreParam?: string | null
 ): Promise<GetStoryResult> {
-  // 1. vid取得/生成
-  const { vid, isNew } = await getOrCreateVid();
+  // 1. vid取得
+  const vid = await getVid();
 
   // 2. bucket算出（JST 10分単位）
   const bucket = getBucket();
@@ -65,7 +62,6 @@ export async function getStory(
           cacheHit: true,
         },
       },
-      newVid: isNew ? vid : null,
     };
   }
 
@@ -123,6 +119,5 @@ export async function getStory(
 
   return {
     story: response,
-    newVid: isNew ? vid : null,
   };
 }
