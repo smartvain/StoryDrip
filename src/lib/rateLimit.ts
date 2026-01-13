@@ -1,20 +1,8 @@
 import { kv } from "@vercel/kv";
+import { getMinuteBucket } from "./hash";
 
 const RATE_LIMIT_MAX = 6; // 1分あたりの最大リクエスト数
 const RATE_LIMIT_TTL = 60; // TTL（秒）
-
-/**
- * 分単位のバケットを取得
- */
-function getMinuteBucket(): string {
-  const now = new Date();
-  const year = now.getUTCFullYear();
-  const month = String(now.getUTCMonth() + 1).padStart(2, "0");
-  const day = String(now.getUTCDate()).padStart(2, "0");
-  const hour = String(now.getUTCHours()).padStart(2, "0");
-  const minute = String(now.getUTCMinutes()).padStart(2, "0");
-  return `${year}${month}${day}${hour}${minute}`;
-}
 
 /**
  * レート制限キーを生成
@@ -29,10 +17,14 @@ export interface RateLimitResult {
   current: number;
   limit: number;
   remaining: number;
+  error?: boolean;
 }
 
 /**
  * レート制限をチェックし、カウントをインクリメント
+ *
+ * セキュリティ方針: fail-closed
+ * KVエラー時はリクエストを拒否してDDoS攻撃を防ぐ
  */
 export async function checkRateLimit(vid: string): Promise<RateLimitResult> {
   try {
@@ -56,13 +48,14 @@ export async function checkRateLimit(vid: string): Promise<RateLimitResult> {
       remaining,
     };
   } catch (error) {
-    console.error("Rate limit check error:", error);
-    // KVエラー時はレート制限をバイパス（可用性優先）
+    console.error("Rate limit check error (fail-closed):", error);
+    // KVエラー時はリクエストを拒否（セキュリティ優先）
     return {
-      allowed: true,
+      allowed: false,
       current: 0,
       limit: RATE_LIMIT_MAX,
-      remaining: RATE_LIMIT_MAX,
+      remaining: 0,
+      error: true,
     };
   }
 }
