@@ -2,12 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { v4 as uuidv4 } from "uuid";
 import { getBucket } from "@/lib/hash";
-import { generateStorySpec, selectGenre } from "@/lib/storySpec";
+import { selectGenre } from "@/lib/storySpec";
 import { type Genre, genres } from "@/lib/pools";
-import type { StoryResponse } from "@/lib/schema";
-import { getCachedStory, setCachedStory } from "@/lib/kv";
 import { checkRateLimit } from "@/lib/rateLimit";
-import { generateStoryWithRetry, getFallbackStory } from "@/lib/ai";
+import { generateStoryCore } from "@/lib/getStory";
 
 const COOKIE_NAME = "vid";
 const COOKIE_MAX_AGE = 31536000; // 1年
@@ -80,80 +78,12 @@ export async function GET(request: NextRequest) {
   const genreParam = request.nextUrl.searchParams.get("genre");
   const genre = parseGenre(genreParam) ?? selectGenre(vid, bucket);
 
-  // 5. キャッシュチェック
-  const cached = await getCachedStory(vid, bucket, genre);
-  if (cached) {
-    // キャッシュヒット
-    const response: StoryResponse = {
-      ...cached,
-      meta: {
-        ...cached.meta,
-        cacheHit: true,
-      },
-    };
-    const res = NextResponse.json(response);
-    res.headers.set("X-Cache", "HIT");
-    setCookieOnResponse(res, vid, isNew);
-    return res;
-  }
+  // 5. ストーリー生成（コアロジック）
+  const { story, cacheHit } = await generateStoryCore(vid, bucket, genre);
 
-  // 6. キャッシュミス → storySpec生成
-  const spec = generateStorySpec(vid, bucket, genre);
-
-  // 7. AI生成（再試行あり）
-  const aiStory = await generateStoryWithRetry(spec);
-  const now = new Date().toISOString();
-
-  let response: StoryResponse;
-  let isFallback = false;
-
-  if (aiStory) {
-    // AI生成成功
-    response = {
-      ...aiStory,
-      seed: {
-        setting: spec.setting,
-        mysterySeed: spec.mysterySeed,
-        constraint: spec.constraint,
-        twist: spec.twist,
-        hookItem: spec.hookItem,
-      },
-      meta: {
-        vid,
-        bucket,
-        cacheHit: false,
-        generatedAt: now,
-      },
-    };
-  } else {
-    // AI生成失敗 → フォールバック
-    console.warn("AI generation failed, using fallback");
-    const fallback = getFallbackStory(spec);
-    response = {
-      ...fallback,
-      seed: {
-        setting: spec.setting,
-        mysterySeed: spec.mysterySeed,
-        constraint: spec.constraint,
-        twist: spec.twist,
-        hookItem: spec.hookItem,
-      },
-      meta: {
-        vid,
-        bucket,
-        cacheHit: false,
-        generatedAt: now,
-      },
-    };
-    isFallback = true;
-  }
-
-  // 8. キャッシュに保存
-  await setCachedStory(vid, bucket, genre, response, isFallback);
-
-  // 9. レスポンス返却
-  const res = NextResponse.json(response);
-  res.headers.set("X-Cache", "MISS");
+  // 6. レスポンス返却
+  const res = NextResponse.json(story);
+  res.headers.set("X-Cache", cacheHit ? "HIT" : "MISS");
   res.headers.set("X-RateLimit-Limit", String(rateLimit.limit));
   res.headers.set("X-RateLimit-Remaining", String(rateLimit.remaining));
   setCookieOnResponse(res, vid, isNew);

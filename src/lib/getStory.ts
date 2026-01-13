@@ -34,24 +34,19 @@ function parseGenre(genreParam: string | null): Genre | null {
 
 export interface GetStoryResult {
   story: StoryResponse;
+  cacheHit: boolean;
+  isFallback: boolean;
 }
 
 /**
- * ストーリーを取得（Server Component用）
+ * ストーリー生成のコアロジック（APIとServer Component共通）
  */
-export async function getStory(
-  genreParam?: string | null
+export async function generateStoryCore(
+  vid: string,
+  bucket: string,
+  genre: Genre
 ): Promise<GetStoryResult> {
-  // 1. vid取得
-  const vid = await getVid();
-
-  // 2. bucket算出（JST 10分単位）
-  const bucket = getBucket();
-
-  // 3. genre決定（クエリ優先、なければハッシュで選択）
-  const genre = parseGenre(genreParam ?? null) ?? selectGenre(vid, bucket);
-
-  // 4. キャッシュチェック
+  // 1. キャッシュチェック
   const cached = await getCachedStory(vid, bucket, genre);
   if (cached) {
     return {
@@ -62,13 +57,15 @@ export async function getStory(
           cacheHit: true,
         },
       },
+      cacheHit: true,
+      isFallback: false,
     };
   }
 
-  // 5. キャッシュミス → storySpec生成
+  // 2. キャッシュミス → storySpec生成
   const spec = generateStorySpec(vid, bucket, genre);
 
-  // 6. AI生成（再試行あり）
+  // 3. AI生成（再試行あり）
   const aiStory = await generateStoryWithRetry(spec);
   const now = new Date().toISOString();
 
@@ -93,7 +90,7 @@ export async function getStory(
       },
     };
   } else {
-    console.warn("AI generation failed, using fallback");
+    console.error("AI generation failed, using fallback");
     const fallback = getFallbackStory(spec);
     response = {
       ...fallback,
@@ -114,10 +111,25 @@ export async function getStory(
     isFallback = true;
   }
 
-  // 7. キャッシュに保存
+  // 4. キャッシュに保存
   await setCachedStory(vid, bucket, genre, response, isFallback);
 
   return {
     story: response,
+    cacheHit: false,
+    isFallback,
   };
+}
+
+/**
+ * ストーリーを取得（Server Component用）
+ */
+export async function getStory(
+  genreParam?: string | null
+): Promise<GetStoryResult> {
+  const vid = await getVid();
+  const bucket = getBucket();
+  const genre = parseGenre(genreParam ?? null) ?? selectGenre(vid, bucket);
+
+  return generateStoryCore(vid, bucket, genre);
 }
