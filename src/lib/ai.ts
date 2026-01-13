@@ -2,8 +2,9 @@ import { generateObject } from "ai";
 import { openai } from "@ai-sdk/openai";
 import { z } from "zod";
 import type { StorySpec } from "./storySpec";
-import { genreLabels, type Genre } from "./pools";
-import type { AIStory } from "./schema";
+import { genreLabels } from "./pools";
+import { safeValidateAIStory, type AIStory } from "./schema";
+import { getOpenAIApiKey } from "./env";
 
 // AI生成用のスキーマ（Vercel AI SDK用）
 const AIStoryGenerationSchema = z.object({
@@ -67,6 +68,9 @@ function buildUserPrompt(spec: StorySpec): string {
  * AI でストーリーを生成
  */
 export async function generateStory(spec: StorySpec): Promise<AIStory | null> {
+  // 環境変数のチェック（不足時は例外をスロー）
+  getOpenAIApiKey();
+
   try {
     const result = await generateObject({
       model: openai("gpt-4o-mini"),
@@ -76,7 +80,14 @@ export async function generateStory(spec: StorySpec): Promise<AIStory | null> {
       temperature: 0.8,
     });
 
-    return result.object as AIStory;
+    // Zodで検証（AIの応答が期待通りの形式か確認）
+    const validation = safeValidateAIStory(result.object);
+    if (!validation.success) {
+      console.error("AI response validation failed:", validation.error.errors);
+      return null;
+    }
+
+    return validation.data;
   } catch (error) {
     console.error("AI generation error:", error);
     return null;
@@ -93,7 +104,7 @@ export async function generateStoryWithRetry(
   const first = await generateStory(spec);
   if (first) return first;
 
-  console.log("First generation failed, retrying...");
+  console.error("First generation failed, retrying...");
 
   // 2回目（再試行）
   const second = await generateStory(spec);
